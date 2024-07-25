@@ -335,25 +335,25 @@ void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_s
 
     RgbToLabKernel<<<gridSize, blockSize, 0, stream>>>(d_frame_rgb, d_frame_lab, width, height);
     RgbToLabKernel<<<gridSize, blockSize, 0, stream>>>(d_bg_rgb, d_bg_lab, width, height);
-    cudaStreamSynchronize(stream);  // Ensure kernels complete
+    cudaStreamSynchronize(stream); 
 
     computeAndNormalizeResidual(d_bg_lab, d_frame_lab, d_residual, d_residual_normalized, width, height, stream);
-    cudaStreamSynchronize(stream);  // Ensure kernels complete
+    cudaStreamSynchronize(stream);  
 
     morphologicalOpening(d_residual_normalized, d_opened, width, height, stream);
-    cudaStreamSynchronize(stream);  // Ensure kernels complete
+    cudaStreamSynchronize(stream);  
 
     hysteresisThreshold(d_opened, d_hysteresis, width, height, 4, 30, stream);
-    cudaStreamSynchronize(stream);  // Ensure kernels complete
+    cudaStreamSynchronize(stream); 
 
     putMask(d_frame_rgb, d_hysteresis, d_output, width, height, stream);
-    cudaStreamSynchronize(stream);  // Ensure kernels complete
+    cudaStreamSynchronize(stream);  
 
     cudaMemcpy(buffer, d_output, rgb_size, cudaMemcpyDeviceToHost);
 
     cudaStreamDestroy(stream);
 
-    // Free allocated memory directly
+    // Free allocated memory 
     if (d_frame_rgb) cudaFree(d_frame_rgb);
     if (d_bg_rgb) cudaFree(d_bg_rgb);
     if (d_frame_lab) cudaFree(d_frame_lab);
