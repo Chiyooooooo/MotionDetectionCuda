@@ -5,18 +5,6 @@
 #include <thrust/device_vector.h>
 #include <thrust/extrema.h>
 
-// Macro to check CUDA errors for debugging
-#define CHECK_CUDA_ERROR(val) check((val), #val, __FILE__, __LINE__)
-
-template <typename T>
-void check(T err, const char* const func, const char* const file, const int line) {
-    if (err != cudaSuccess) {
-        std::fprintf(stderr, "CUDA Runtime Error at: %s: %d\n", file, line);
-        std::fprintf(stderr, "%s %s\n", cudaGetErrorString(err), func);
-        std::exit(EXIT_FAILURE);
-    }
-}
-
 // Struct for RGB color (uint8)
 struct rgb {
     uint8_t r, g, b;
@@ -66,9 +54,9 @@ __global__ void RgbToLabKernel(const rgb* rgbFrame, lab* labFrame, int width, in
 // Device function to calculate color difference
 __device__ float deltaE(const lab& pixel1, const lab& pixel2) {
     return sqrtf(
-        (pixel1.l - pixel2.l) * (pixel1.l - pixel2.l) +
-        (pixel1.a - pixel2.a) * (pixel1.a - pixel2.a) +
-        (pixel1.b - pixel2.b) * (pixel1.b - pixel2.b)
+            (pixel1.l - pixel2.l) * (pixel1.l - pixel2.l) +
+            (pixel1.a - pixel2.a) * (pixel1.a - pixel2.a) +
+            (pixel1.b - pixel2.b) * (pixel1.b - pixel2.b)
     );
 }
 
@@ -286,13 +274,9 @@ BackgroundModel bg_model;
 extern "C" {
 void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride) {
     static int frame_count = 0;
-    static bool first_call = true;
-    static rgb *d_frame_rgb = nullptr, *d_bg_rgb = nullptr, *d_output = nullptr;
-    static lab *d_frame_lab = nullptr, *d_bg_lab = nullptr;
-    static float *d_residual = nullptr;
-    static uint8_t *d_residual_normalized = nullptr, *d_opened = nullptr, *d_hysteresis = nullptr;
-
+    bool first_call = true;
     frame_count++;
+
     if (!bg_model.is_initialized) {
         bg_model.data = new rgb[width * height];
         bg_model.width = width;
@@ -311,6 +295,18 @@ void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_s
     size_t float_size = width * height * sizeof(float);
     size_t uint8_size = width * height * sizeof(uint8_t);
 
+    rgb *d_frame_rgb = nullptr;
+    rgb *d_bg_rgb = nullptr;
+    lab *d_frame_lab = nullptr;
+    lab *d_bg_lab = nullptr;
+    float *d_residual = nullptr;
+    uint8_t *d_residual_normalized = nullptr;
+    uint8_t *d_opened = nullptr;
+    uint8_t *d_hysteresis = nullptr;
+    rgb *d_output = nullptr;
+
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
     if (first_call) {
         cudaMalloc(&d_frame_rgb, rgb_size);
         cudaMalloc(&d_bg_rgb, rgb_size);
@@ -330,48 +326,35 @@ void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_s
     dim3 blockSize(16, 16);
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
 
-    cudaStream_t stream;
-    cudaStreamCreate(&stream);
-
     RgbToLabKernel<<<gridSize, blockSize, 0, stream>>>(d_frame_rgb, d_frame_lab, width, height);
     RgbToLabKernel<<<gridSize, blockSize, 0, stream>>>(d_bg_rgb, d_bg_lab, width, height);
-    cudaStreamSynchronize(stream); 
+    cudaStreamSynchronize(stream);
 
     computeAndNormalizeResidual(d_bg_lab, d_frame_lab, d_residual, d_residual_normalized, width, height, stream);
-    cudaStreamSynchronize(stream);  
+    cudaStreamSynchronize(stream);
 
     morphologicalOpening(d_residual_normalized, d_opened, width, height, stream);
-    cudaStreamSynchronize(stream);  
+    cudaStreamSynchronize(stream);
 
     hysteresisThreshold(d_opened, d_hysteresis, width, height, 4, 30, stream);
-    cudaStreamSynchronize(stream); 
+    cudaStreamSynchronize(stream);
 
     putMask(d_frame_rgb, d_hysteresis, d_output, width, height, stream);
-    cudaStreamSynchronize(stream);  
+    cudaStreamSynchronize(stream);
 
     cudaMemcpy(buffer, d_output, rgb_size, cudaMemcpyDeviceToHost);
 
     cudaStreamDestroy(stream);
 
-    // Free allocated memory 
-    if (d_frame_rgb) cudaFree(d_frame_rgb);
-    if (d_bg_rgb) cudaFree(d_bg_rgb);
-    if (d_frame_lab) cudaFree(d_frame_lab);
-    if (d_bg_lab) cudaFree(d_bg_lab);
-    if (d_residual) cudaFree(d_residual);
-    if (d_residual_normalized) cudaFree(d_residual_normalized);
-    if (d_opened) cudaFree(d_opened);
-    if (d_hysteresis) cudaFree(d_hysteresis);
-    if (d_output) cudaFree(d_output);
-
-    d_frame_rgb = nullptr;
-    d_bg_rgb = nullptr;
-    d_frame_lab = nullptr;
-    d_bg_lab = nullptr;
-    d_residual = nullptr;
-    d_residual_normalized = nullptr;
-    d_opened = nullptr;
-    d_hysteresis = nullptr;
-    d_output = nullptr;
+    // Free allocated memory
+    cudaFree(d_frame_rgb);
+    cudaFree(d_bg_rgb);
+    cudaFree(d_frame_lab);
+    cudaFree(d_bg_lab);
+    cudaFree(d_residual);
+    cudaFree(d_residual_normalized);
+    cudaFree(d_opened);
+    cudaFree(d_hysteresis);
+    cudaFree(d_output);
 }
 } // extern "C"
