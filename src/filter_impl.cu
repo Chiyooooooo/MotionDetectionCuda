@@ -153,6 +153,8 @@ __global__ void hysteresisThresholdKernel(const uint8_t* src, uint8_t* dst, bool
         if (pixel > maxThreshold) {
             strong_edges[idx] = true;
             dst[idx] = 255;
+        } else if (pixel > minThreshold) {
+            dst[idx] = 128; // Weak edge
         } else {
             dst[idx] = 0;
         }
@@ -160,7 +162,7 @@ __global__ void hysteresisThresholdKernel(const uint8_t* src, uint8_t* dst, bool
 }
 
 // Kernel for propagating strong edges
-__global__ void StrongEdgesPropagationKernel(const uint8_t* src, uint8_t* dst, bool* strong_edges, int width, int height, int minThreshold) {
+__global__ void StrongEdgesPropagationKernel(const uint8_t* src, uint8_t* dst, bool* strong_edges, int width, int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int idx = y * width + x;
@@ -172,8 +174,7 @@ __global__ void StrongEdgesPropagationKernel(const uint8_t* src, uint8_t* dst, b
                 int ny = y + dy;
                 if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
                     int n_idx = ny * width + nx;
-                    uint8_t neighbor_pixel = src[n_idx];
-                    if (neighbor_pixel >= minThreshold && !strong_edges[n_idx]) {
+                    if (src[n_idx] == 128) { 
                         strong_edges[n_idx] = true;
                         dst[n_idx] = 255;
                     }
@@ -250,7 +251,10 @@ void hysteresisThreshold(const uint8_t* src, uint8_t* dst, int width, int height
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
 
     hysteresisThresholdKernel<<<gridSize, blockSize, 0, stream>>>(src, dst, d_strong_edges, width, height, minThreshold, maxThreshold);
-    StrongEdgesPropagationKernel<<<gridSize, blockSize, 0, stream>>>(src, dst, d_strong_edges, width, height, minThreshold);
+    cudaDeviceSynchronize();  // Ensure hysteresisThresholdKernel completes
+
+    StrongEdgesPropagationKernel<<<gridSize, blockSize, 0, stream>>>(dst, dst, d_strong_edges, width, height);
+    cudaDeviceSynchronize();  // Ensure StrongEdgesPropagationKernel completes
 
     cudaFree(d_strong_edges);
 }
@@ -340,5 +344,26 @@ void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_s
     cudaMemcpy(buffer, d_output, rgb_size, cudaMemcpyDeviceToHost);
 
     cudaStreamDestroy(stream);
+
+    // Free allocated memory directly
+    if (d_frame_rgb) cudaFree(d_frame_rgb);
+    if (d_bg_rgb) cudaFree(d_bg_rgb);
+    if (d_frame_lab) cudaFree(d_frame_lab);
+    if (d_bg_lab) cudaFree(d_bg_lab);
+    if (d_residual) cudaFree(d_residual);
+    if (d_residual_normalized) cudaFree(d_residual_normalized);
+    if (d_opened) cudaFree(d_opened);
+    if (d_hysteresis) cudaFree(d_hysteresis);
+    if (d_output) cudaFree(d_output);
+
+    d_frame_rgb = nullptr;
+    d_bg_rgb = nullptr;
+    d_frame_lab = nullptr;
+    d_bg_lab = nullptr;
+    d_residual = nullptr;
+    d_residual_normalized = nullptr;
+    d_opened = nullptr;
+    d_hysteresis = nullptr;
+    d_output = nullptr;
 }
-}
+} // extern "C"
