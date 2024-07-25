@@ -5,23 +5,24 @@
 #include <thrust/device_vector.h>
 #include <thrust/extrema.h>
 
-// Macro pour vérifier les erreurs CUDA, utile pour le débugging
+// Macro to check CUDA errors for debugging
 #define CHECK_CUDA_ERROR(val) check((val), #val, __FILE__, __LINE__)
 
 template <typename T>
 void check(T err, const char* const func, const char* const file, const int line) {
     if (err != cudaSuccess) {
-        std::fprintf(stderr, "Erreur Runtime CUDA à : %s: %d\n", file, line);
+        std::fprintf(stderr, "CUDA Runtime Error at: %s: %d\n", file, line);
         std::fprintf(stderr, "%s %s\n", cudaGetErrorString(err), func);
         std::exit(EXIT_FAILURE);
     }
 }
 
-// Struct pour la couleur RGB uint8 
+// Struct for RGB color (uint8)
 struct rgb {
     uint8_t r, g, b;
 };
 
+// Struct for LAB color space
 struct lab {
     float l, a, b;
 };
@@ -34,18 +35,16 @@ __device__ float f(float t) {
     return (t > 0.008856f) ? powf(t, 1.0f / 3.0f) : (7.787f * t) + (16.0f / 116.0f);
 }
 
-// Conversion RGB vers LAB (je sais pas si les formules sont correctes)
+// Convert RGB to LAB color space
 __device__ lab RGBtoLAB(const rgb& rgb) {
     float r = correction_gamma(rgb.r / 255.0f);
     float g = correction_gamma(rgb.g / 255.0f);
     float b = correction_gamma(rgb.b / 255.0f);
 
-    // Conversion en espace de couleur XYZ
     float X = r * 0.4124564f + g * 0.3575761f + b * 0.1804375f;
     float Y = r * 0.2126729f + g * 0.7151522f + b * 0.0721750f;
     float Z = r * 0.0193339f + g * 0.1191920f + b * 0.9503041f;
 
-    // Conversion en espace de couleur LAB
     float fx = f(X / 95.047f);
     float fy = f(Y / 100.0f);
     float fz = f(Z / 108.883f);
@@ -53,7 +52,7 @@ __device__ lab RGBtoLAB(const rgb& rgb) {
     return { (116.0f * fy) - 16.0f, 500.0f * (fx - fy), 200.0f * (fy - fz) };
 }
 
-// Kernel pour convertir une frame RGB en frame LAB 
+// Kernel to convert RGB frame to LAB frame
 __global__ void RgbToLabKernel(const rgb* rgbFrame, lab* labFrame, int width, int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -64,15 +63,16 @@ __global__ void RgbToLabKernel(const rgb* rgbFrame, lab* labFrame, int width, in
     }
 }
 
-// Fonction device pour calculer la différence de couleur 
+// Device function to calculate color difference
 __device__ float deltaE(const lab& pixel1, const lab& pixel2) {
     return sqrtf(
-            (pixel1.l - pixel2.l) * (pixel1.l - pixel2.l) +
-            (pixel1.a - pixel2.a) * (pixel1.a - pixel2.a) +
-            (pixel1.b - pixel2.b) * (pixel1.b - pixel2.b)
+        (pixel1.l - pixel2.l) * (pixel1.l - pixel2.l) +
+        (pixel1.a - pixel2.a) * (pixel1.a - pixel2.a) +
+        (pixel1.b - pixel2.b) * (pixel1.b - pixel2.b)
     );
 }
 
+// Kernel to compute residual difference
 __global__ void ComputeResidualKernel(const lab* img1, const lab* img2, float* residual, int width, int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -83,7 +83,7 @@ __global__ void ComputeResidualKernel(const lab* img1, const lab* img2, float* r
     }
 }
 
-// Kernel pour normaliser l'image résiduelle 
+// Kernel to normalize the residual image
 __global__ void normalizeResidualKernel(const float* residual, uint8_t* normalizedResidual, float maxResidual, int width, int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -94,7 +94,7 @@ __global__ void normalizeResidualKernel(const float* residual, uint8_t* normaliz
     }
 }
 
-// erosion
+// Kernel for erosion
 __global__ void erodeKernel(const uint8_t* src, uint8_t* dst, int width, int height, int radius) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -118,7 +118,7 @@ __global__ void erodeKernel(const uint8_t* src, uint8_t* dst, int width, int hei
     }
 }
 
-// Kernel pour la dilatation morphologique (pareil ici)
+// Kernel for dilation
 __global__ void dilateKernel(const uint8_t* src, uint8_t* dst, int width, int height, int radius) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -142,14 +142,15 @@ __global__ void dilateKernel(const uint8_t* src, uint8_t* dst, int width, int he
     }
 }
 
-__global__ void hysteresisThresholdKernel(const uint8_t* src, uint8_t* dst, bool* strong_edges, int width, int height, int seuil_min, int seuil_max) {
+// Kernel for hysteresis thresholding
+__global__ void hysteresisThresholdKernel(const uint8_t* src, uint8_t* dst, bool* strong_edges, int width, int height, int minThreshold, int maxThreshold) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int idx = y * width + x;
 
     if (x < width && y < height) {
         uint8_t pixel = src[idx];
-        if (pixel > seuil_max) {
+        if (pixel > maxThreshold) {
             strong_edges[idx] = true;
             dst[idx] = 255;
         } else {
@@ -158,8 +159,8 @@ __global__ void hysteresisThresholdKernel(const uint8_t* src, uint8_t* dst, bool
     }
 }
 
-
-__global__ void StrongEdgesPropagationKernel(const uint8_t* src, uint8_t* dst, bool* strong_edges, int width, int height, int seuil_min) {
+// Kernel for propagating strong edges
+__global__ void StrongEdgesPropagationKernel(const uint8_t* src, uint8_t* dst, bool* strong_edges, int width, int height, int minThreshold) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int idx = y * width + x;
@@ -172,7 +173,7 @@ __global__ void StrongEdgesPropagationKernel(const uint8_t* src, uint8_t* dst, b
                 if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
                     int n_idx = ny * width + nx;
                     uint8_t neighbor_pixel = src[n_idx];
-                    if (neighbor_pixel >= seuil_min && !strong_edges[n_idx]) {
+                    if (neighbor_pixel >= minThreshold && !strong_edges[n_idx]) {
                         strong_edges[n_idx] = true;
                         dst[n_idx] = 255;
                     }
@@ -182,7 +183,7 @@ __global__ void StrongEdgesPropagationKernel(const uint8_t* src, uint8_t* dst, b
     }
 }
 
-// a fix lae rgb
+// Kernel to apply a mask to the RGB image
 __global__ void putMaskKernel(const rgb* input, const uint8_t* mask, rgb* output, int width, int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -195,7 +196,6 @@ __global__ void putMaskKernel(const rgb* input, const uint8_t* mask, rgb* output
         rgb pixel_output;
 
         if (pixel_mask > 0) {
-            // //
             pixel_output.r = static_cast<uint8_t>(min(255.0f, pixel.r * 0.5f + red.r * 0.5f));
             pixel_output.g = static_cast<uint8_t>(min(255.0f, pixel.g * 0.5f + red.g * 0.5f));
             pixel_output.b = static_cast<uint8_t>(min(255.0f, pixel.b * 0.5f + red.b * 0.5f));
@@ -207,7 +207,7 @@ __global__ void putMaskKernel(const rgb* input, const uint8_t* mask, rgb* output
     }
 }
 
-// Fonction pour calculer et normalisefaut laa check)
+// Function to compute and normalize residuals
 void computeAndNormalizeResidual(const lab* img1, const lab* img2, float* residual, uint8_t* normalizedResidual, int width, int height, cudaStream_t stream) {
     int size = width * height;
     dim3 blockSize(16, 16);
@@ -221,9 +221,9 @@ void computeAndNormalizeResidual(const lab* img1, const lab* img2, float* residu
     normalizeResidualKernel<<<gridSize, blockSize, 0, stream>>>(residual, normalizedResidual, maxResidual, width, height);
 }
 
-// Fonction pour l'ouverture morphologique (érosion suivie de dilatation) sans fermutre, le plus simple pour optimiser le temps de calcul
+// Function for morphological opening (erosion followed by dilation)
 void morphologicalOpening(const uint8_t* src, uint8_t* dst, int width, int height, cudaStream_t stream) {
-    int radius = 3; // Rayon ste a 3 comme dans le pdf 
+    int radius = 3;
     uint8_t* d_temp;
     size_t size = width * height * sizeof(uint8_t);
 
@@ -238,8 +238,8 @@ void morphologicalOpening(const uint8_t* src, uint8_t* dst, int width, int heigh
     cudaFree(d_temp);
 }
 
-// Fonction pour l''hystérésis
-void hysteresisThreshold(const uint8_t* src, uint8_t* dst, int width, int height, int seuil_min, int seuil_max, cudaStream_t stream) {
+// Function for hysteresis thresholding
+void hysteresisThreshold(const uint8_t* src, uint8_t* dst, int width, int height, int minThreshold, int maxThreshold, cudaStream_t stream) {
     size_t bool_size = width * height * sizeof(bool);
     bool* d_strong_edges;
 
@@ -249,13 +249,13 @@ void hysteresisThreshold(const uint8_t* src, uint8_t* dst, int width, int height
     dim3 blockSize(16, 16);
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
 
-    hysteresisThresholdKernel<<<gridSize, blockSize, 0, stream>>>(src, dst, d_strong_edges, width, height, seuil_min, seuil_max);
-    StrongEdgesPropagationKernel<<<gridSize, blockSize, 0, stream>>>(src, dst, d_strong_edges, width, height, seuil_min);
+    hysteresisThresholdKernel<<<gridSize, blockSize, 0, stream>>>(src, dst, d_strong_edges, width, height, minThreshold, maxThreshold);
+    StrongEdgesPropagationKernel<<<gridSize, blockSize, 0, stream>>>(src, dst, d_strong_edges, width, height, minThreshold);
 
     cudaFree(d_strong_edges);
 }
 
-// Fonction pour appliquer un masque à l'image
+// Function to apply a mask to the image
 void putMask(const rgb* input, const uint8_t* mask, rgb* output, int width, int height, cudaStream_t stream) {
     dim3 blockSize(16, 16);
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
@@ -263,7 +263,7 @@ void putMask(const rgb* input, const uint8_t* mask, rgb* output, int width, int 
     putMaskKernel<<<gridSize, blockSize, 0, stream>>>(input, mask, output, width, height);
 }
 
-// Struct pour contenir les données du modèle de fond
+// Struct for background model data
 struct BackgroundModel {
     rgb* data = nullptr;
     int width = 0;
@@ -278,7 +278,7 @@ struct BackgroundModel {
 
 BackgroundModel bg_model;
 
-// Fonction externe pour filtrer l'image
+// External function to filter the image
 extern "C" {
 void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride) {
     static int frame_count = 0;

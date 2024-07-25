@@ -13,14 +13,17 @@
 #include <algorithm>
 #include <deque>
 
+// Struct for RGB color (uint8)
 struct rgb {
     uint8_t r, g, b;
 };
 
+// Struct for LAB color space
 struct lab {
     double l, a, b;
 };
 
+// Struct for background model data
 struct BackgroundModel {
     std::deque<std::vector<rgb>> frames;
     int width = 0;
@@ -31,26 +34,44 @@ struct BackgroundModel {
 
 BackgroundModel bg_model;
 
+/**
+ * @brief Apply gamma correction to a color channel.
+ *
+ * @param channel The input color channel value.
+ * @return The gamma-corrected color channel value.
+ */
 double gammaCorrection(double channel) {
     return (channel <= 0.04045) ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4);
 }
 
+/**
+ * @brief Convert an RGB color to XYZ color space.
+ *
+ * @param rgb The input RGB color.
+ * @return The corresponding XYZ color.
+ */
 std::array<double, 3> RGBtoXYZ(const rgb& rgb) {
-    double r_normalized = rgb.r / 255.0; // On normalise les données
+    double r_normalized = rgb.r / 255.0;
     double g_normalized = rgb.g / 255.0;
     double b_normalized = rgb.b / 255.0;
 
-    double R = gammaCorrection(r_normalized); // On applique la correction gamma sur les 3 canaux
+    double R = gammaCorrection(r_normalized);
     double G = gammaCorrection(g_normalized);
     double B = gammaCorrection(b_normalized);
 
-    double X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375; // On convertit d'abord les données dans l'espace XYZ
+    double X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375;
     double Y = R * 0.2126729 + G * 0.7151522 + B * 0.0721750;
     double Z = R * 0.0193339 + G * 0.1191920 + B * 0.9503041;
 
     return {X * 100 / 95.047, Y * 100 / 100.000, Z * 100 / 108.883};
 }
 
+/**
+ * @brief Helper function for LAB conversion.
+ *
+ * @param t The input value.
+ * @return The transformed value.
+ */
 double f(double t) {
     const double delta = 6.0 / 29.0;
     const double delta3 = delta * delta * delta;
@@ -62,55 +83,86 @@ double f(double t) {
     }
 }
 
-lab XYZtoLAB(const std::array<double, 3>& xyz) { // Fonction qui convertit un pixel de l'espace XYZ vers LAB
+/**
+ * @brief Convert an XYZ color to LAB color space.
+ *
+ * @param xyz The input XYZ color.
+ * @return The corresponding LAB color.
+ */
+lab XYZtoLAB(const std::array<double, 3>& xyz) {
     double X = f(xyz[0]);
     double Y = f(xyz[1]);
     double Z = f(xyz[2]);
 
-    lab lab_;
-    lab_.l = (116.0 * Y) - 16.0;
-    lab_.a = 500.0 * (X - Y);
-    lab_.b = 200.0 * (Y - Z);
-
-    return lab_;
+    return {(116.0 * Y) - 16.0, 500.0 * (X - Y), 200.0 * (Y - Z)};
 }
 
-
-// Afin de tester nos conversions, nous avons implémenté la conversion inverse pour vérifier les résultats
-lab RGBtoLAB(const rgb& rgb_) {   // Fonction pour effectuer la conversion inverse (LAB vers RGB).
+/**
+ * @brief Convert an RGB color to LAB color space.
+ *
+ * @param rgb_ The input RGB color.
+ * @return The corresponding LAB color.
+ */
+lab RGBtoLAB(const rgb& rgb_) {
     std::array<double, 3> xyz = RGBtoXYZ(rgb_);
     return XYZtoLAB(xyz);
 }
 
+/**
+ * @brief Convert an array of RGB colors to LAB color space.
+ *
+ * @param rgbPixels The input array of RGB colors.
+ * @param labPixels The output array of LAB colors.
+ * @param size The size of the input array.
+ */
 void RGBtoLAB(const rgb* rgbPixels, lab* labPixels, int size) {
     for (int i = 0; i < size; ++i) {
         labPixels[i] = RGBtoLAB(rgbPixels[i]);
     }
 }
 
-// Fonction pour calculer la distance entre 2 pixels dans l'espace LAB
+/**
+ * @brief Calculate the color difference between two LAB colors.
+ *
+ * @param lab1 The first LAB color.
+ * @param lab2 The second LAB color.
+ * @return The color difference.
+ */
 double deltaE(const lab& lab1, const lab& lab2) {
     return std::sqrt(
-            (lab1.l - lab2.l) * (lab1.l - lab2.l) +
-            (lab1.a - lab2.a) * (lab1.a - lab2.a) +
-            (lab1.b - lab2.b) * (lab1.b - lab2.b)
+        (lab1.l - lab2.l) * (lab1.l - lab2.l) +
+        (lab1.a - lab2.a) * (lab1.a - lab2.a) +
+        (lab1.b - lab2.b) * (lab1.b - lab2.b)
     );
 }
 
-// Fonction permettant de calculer l'image résidu à partir de 2 frames
-void ComputeResidual(const lab* img_1, const lab* img_2, double* residual, int size) {
+/**
+ * @brief Compute the residual image from two LAB images.
+ *
+ * @param img1 The first LAB image.
+ * @param img2 The second LAB image.
+ * @param residual The output residual image.
+ * @param size The size of the input images.
+ */
+void ComputeResidual(const lab* img1, const lab* img2, double* residual, int size) {
     for (int i = 0; i < size; ++i) {
-        residual[i] = deltaE(img_1[i], img_2[i]);
+        residual[i] = deltaE(img1[i], img2[i]);
     }
 }
 
-
-// Après avoir calculé l'image résidu, nous effectuons une normalisation des pixels pour les placer dans des valeurs entre 0 et 255.
-// C'est équivalent à une conversion en niveau de gris
-void ComputeAndNormalizeResidual(const lab* img_1, const lab* img_2, double* residual, uint8_t* normalizedResidual, int size) {
+/**
+ * @brief Compute and normalize the residual image.
+ *
+ * @param img1 The first LAB image.
+ * @param img2 The second LAB image.
+ * @param residual The output residual image.
+ * @param normalizedResidual The output normalized residual image.
+ * @param size The size of the input images.
+ */
+void ComputeAndNormalizeResidual(const lab* img1, const lab* img2, double* residual, uint8_t* normalizedResidual, int size) {
     double maxResidual = 0.0;
     for (int i = 0; i < size; ++i) {
-        double r = deltaE(img_1[i], img_2[i]);
+        double r = deltaE(img1[i], img2[i]);
         residual[i] = r;
         if (r > maxResidual) {
             maxResidual = r;
@@ -122,8 +174,14 @@ void ComputeAndNormalizeResidual(const lab* img_1, const lab* img_2, double* res
     }
 }
 
-
-// Fonction pour ajouter un bruit Gaussien
+/**
+ * @brief Apply Gaussian blur to an image.
+ *
+ * @param src The input image.
+ * @param dst The output blurred image.
+ * @param width The width of the image.
+ * @param height The height of the image.
+ */
 void gaussianBlur(const uint8_t* src, uint8_t* dst, int width, int height) {
     int kernel_size = 5;
     double sigma = 1.0;
@@ -157,8 +215,15 @@ void gaussianBlur(const uint8_t* src, uint8_t* dst, int width, int height) {
     }
 }
 
-
-// Fcontion pour effectuer l'érosion sur l'image résidue
+/**
+ * @brief Perform erosion on an image.
+ *
+ * @param src The input image.
+ * @param dst The output eroded image.
+ * @param width The width of the image.
+ * @param height The height of the image.
+ * @param radius The radius of the erosion.
+ */
 void erode(const uint8_t* src, uint8_t* dst, int width, int height, int radius = 1) {
     for (int y = radius; y < height - radius; ++y) {
         for (int x = radius; x < width - radius; ++x) {
@@ -178,7 +243,15 @@ void erode(const uint8_t* src, uint8_t* dst, int width, int height, int radius =
     }
 }
 
-// Fonction pour effectuer la dilatation sur l'image résidue
+/**
+ * @brief Perform dilation on an image.
+ *
+ * @param src The input image.
+ * @param dst The output dilated image.
+ * @param width The width of the image.
+ * @param height The height of the image.
+ * @param radius The radius of the dilation.
+ */
 void dilate(const uint8_t* src, uint8_t* dst, int width, int height, int radius = 1) {
     for (int y = radius; y < height - radius; ++y) {
         for (int x = radius; x < width - radius; ++x) {
@@ -198,20 +271,45 @@ void dilate(const uint8_t* src, uint8_t* dst, int width, int height, int radius 
     }
 }
 
-
-// On regroupe l'ouverture et la dilatation dans une même fonction pour faire l'ouvertur
+/**
+ * @brief Perform morphological opening (erosion followed by dilation) on an image.
+ *
+ * @param src The input image.
+ * @param dst The output image.
+ * @param width The width of the image.
+ * @param height The height of the image.
+ * @param radius The radius of the structuring element.
+ */
 void opening(const uint8_t* src, uint8_t* dst, int width, int height, int radius = 1) {
     std::vector<uint8_t> temp(width * height);
     erode(src, temp.data(), width, height, radius);
     dilate(temp.data(), dst, width, height, radius);
 }
 
+/**
+ * @brief Perform morphological closing (dilation followed by erosion) on an image.
+ *
+ * @param src The input image.
+ * @param dst The output image.
+ * @param width The width of the image.
+ * @param height The height of the image.
+ * @param radius The radius of the structuring element.
+ */
 void closing(const uint8_t* src, uint8_t* dst, int width, int height, int radius = 1) {
     std::vector<uint8_t> temp(width * height);
     dilate(src, temp.data(), width, height, radius);
     erode(temp.data(), dst, width, height, radius);
 }
 
+/**
+ * @brief Perform a series of morphological operations (erosion, dilation, opening, and closing) on an image.
+ *
+ * @param src The input image.
+ * @param dst The output image.
+ * @param width The width of the image.
+ * @param height The height of the image.
+ * @param radius The radius of the structuring element.
+ */
 void morphologicalOperations(const uint8_t* src, uint8_t* dst, int width, int height, int radius = 1) {
     std::vector<uint8_t> temp1(width * height);
     std::vector<uint8_t> temp2(width * height);
@@ -222,9 +320,17 @@ void morphologicalOperations(const uint8_t* src, uint8_t* dst, int width, int he
     closing(temp1.data(), dst, width, height, radius);
 }
 
-
-// Seuillage d'hystérésis 
-void hysteresis_threshold(const uint8_t* src, uint8_t* dst, int width, int height, int seuil_min, int seuil_max) {
+/**
+ * @brief Apply hysteresis thresholding to an image.
+ *
+ * @param src The input image.
+ * @param dst The output image.
+ * @param width The width of the image.
+ * @param height The height of the image.
+ * @param minThreshold The lower threshold.
+ * @param maxThreshold The upper threshold.
+ */
+void hysteresis_threshold(const uint8_t* src, uint8_t* dst, int width, int height, int minThreshold, int maxThreshold) {
     std::fill(dst, dst + width * height, 0);
     std::vector<bool> strong_edges(width * height, false);
 
@@ -232,7 +338,7 @@ void hysteresis_threshold(const uint8_t* src, uint8_t* dst, int width, int heigh
         for (int x = 0; x < width; ++x) {
             int idx = y * width + x;
             uint8_t pixel = src[idx];
-            if (pixel > seuil_max) {
+            if (pixel > maxThreshold) {
                 strong_edges[idx] = true;
                 dst[idx] = 255;
             }
@@ -249,7 +355,7 @@ void hysteresis_threshold(const uint8_t* src, uint8_t* dst, int width, int heigh
                         int nx = x + dx;
                         int n_idx = ny * width + nx;
                         uint8_t neighbor_pixel = src[n_idx];
-                        if (neighbor_pixel >= seuil_min && !strong_edges[n_idx]) {
+                        if (neighbor_pixel >= minThreshold && !strong_edges[n_idx]) {
                             strong_edges[n_idx] = true;
                             dst[n_idx] = 255;
                         }
@@ -259,7 +365,16 @@ void hysteresis_threshold(const uint8_t* src, uint8_t* dst, int width, int heigh
         }
     }
 }
-// La fonction permettant d'appliquer le masque sur la frame initiale.
+
+/**
+ * @brief Apply a mask to an RGB image, highlighting masked areas in red.
+ *
+ * @param input The input RGB image.
+ * @param mask The mask image.
+ * @param output The output image.
+ * @param width The width of the image.
+ * @param height The height of the image.
+ */
 void put_mask(const rgb* input, const uint8_t* mask, rgb* output, int width, int height) {
     rgb red = {255, 0, 0};
     for (int y = 0; y < height; ++y) {
@@ -282,6 +397,14 @@ void put_mask(const rgb* input, const uint8_t* mask, rgb* output, int width, int
     }
 }
 
+/**
+ * @brief Compute the mean background from a series of frames.
+ *
+ * @param frames The input frames.
+ * @param mean_frame The output mean frame.
+ * @param width The width of the frames.
+ * @param height The height of the frames.
+ */
 void computeMeanBackground(const std::deque<std::vector<rgb>>& frames, rgb* mean_frame, int width, int height) {
     size_t num_frames = frames.size();
     std::vector<double> r_sum(width * height, 0.0);
@@ -303,6 +426,15 @@ void computeMeanBackground(const std::deque<std::vector<rgb>>& frames, rgb* mean
     }
 }
 
+/**
+ * @brief Main filtering function that processes the input buffer to detect and highlight changes.
+ *
+ * @param buffer The input buffer containing the image data.
+ * @param width The width of the image.
+ * @param height The height of the image.
+ * @param stride The stride of the image.
+ * @param pixel_stride The pixel stride of the image.
+ */
 extern "C" {
 void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_stride) {
     static int frame_count = 0;
