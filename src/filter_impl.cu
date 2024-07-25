@@ -174,7 +174,7 @@ __global__ void StrongEdgesPropagationKernel(const uint8_t* src, uint8_t* dst, b
                 int ny = y + dy;
                 if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
                     int n_idx = ny * width + nx;
-                    if (src[n_idx] == 128) { 
+                    if (src[n_idx] == 128) { // If it's a weak edge
                         strong_edges[n_idx] = true;
                         dst[n_idx] = 255;
                     }
@@ -251,10 +251,10 @@ void hysteresisThreshold(const uint8_t* src, uint8_t* dst, int width, int height
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
 
     hysteresisThresholdKernel<<<gridSize, blockSize, 0, stream>>>(src, dst, d_strong_edges, width, height, minThreshold, maxThreshold);
-    cudaDeviceSynchronize();  // Ensure hysteresisThresholdKernel completes
+    cudaStreamSynchronize(stream);  // Ensure hysteresisThresholdKernel completes
 
     StrongEdgesPropagationKernel<<<gridSize, blockSize, 0, stream>>>(dst, dst, d_strong_edges, width, height);
-    cudaDeviceSynchronize();  // Ensure StrongEdgesPropagationKernel completes
+    cudaStreamSynchronize(stream);  // Ensure StrongEdgesPropagationKernel completes
 
     cudaFree(d_strong_edges);
 }
@@ -335,11 +335,19 @@ void filter_impl(uint8_t* buffer, int width, int height, int stride, int pixel_s
 
     RgbToLabKernel<<<gridSize, blockSize, 0, stream>>>(d_frame_rgb, d_frame_lab, width, height);
     RgbToLabKernel<<<gridSize, blockSize, 0, stream>>>(d_bg_rgb, d_bg_lab, width, height);
+    cudaStreamSynchronize(stream);  // Ensure kernels complete
 
     computeAndNormalizeResidual(d_bg_lab, d_frame_lab, d_residual, d_residual_normalized, width, height, stream);
+    cudaStreamSynchronize(stream);  // Ensure kernels complete
+
     morphologicalOpening(d_residual_normalized, d_opened, width, height, stream);
+    cudaStreamSynchronize(stream);  // Ensure kernels complete
+
     hysteresisThreshold(d_opened, d_hysteresis, width, height, 4, 30, stream);
+    cudaStreamSynchronize(stream);  // Ensure kernels complete
+
     putMask(d_frame_rgb, d_hysteresis, d_output, width, height, stream);
+    cudaStreamSynchronize(stream);  // Ensure kernels complete
 
     cudaMemcpy(buffer, d_output, rgb_size, cudaMemcpyDeviceToHost);
 
