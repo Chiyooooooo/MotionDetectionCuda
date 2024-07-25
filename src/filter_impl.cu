@@ -141,8 +141,8 @@ __global__ void hysteresisThresholdKernel(const uint8_t* src, uint8_t* dst, bool
         if (pixel > maxThreshold) {
             strong_edges[idx] = true;
             dst[idx] = 255;
-        } else if (pixel > minThreshold) {
-            dst[idx] = 128; // Weak edge
+       // } else if (pixel > minThreshold) {
+          //  dst[idx] = 128; 
         } else {
             dst[idx] = 0;
         }
@@ -239,10 +239,10 @@ void hysteresisThreshold(const uint8_t* src, uint8_t* dst, int width, int height
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
 
     hysteresisThresholdKernel<<<gridSize, blockSize, 0, stream>>>(src, dst, d_strong_edges, width, height, minThreshold, maxThreshold);
-    cudaStreamSynchronize(stream);  // Ensure hysteresisThresholdKernel completes
+    cudaStreamSynchronize(stream);  
 
     StrongEdgesPropagationKernel<<<gridSize, blockSize, 0, stream>>>(dst, dst, d_strong_edges, width, height);
-    cudaStreamSynchronize(stream);  // Ensure StrongEdgesPropagationKernel completes
+    cudaStreamSynchronize(stream);  
 
     cudaFree(d_strong_edges);
 }
